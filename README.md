@@ -104,4 +104,4 @@ python slideshow.py --shuffle --transition slide_random
 
 ## License
 
-[MIT License](LICENSE) 
+[GNU GPLv3](https://choosealicense.com/licenses/gpl-3.0/)

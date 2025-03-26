@@ -57,6 +57,32 @@ except ImportError:
     print("PySide6 is required. Install it with: pip install PySide6")
     sys.exit(1)
 
+# Configuration Constants
+DEFAULT_CONFIG = {
+    'folder': '.',
+    'duration': 5,
+    'monitor': 0,
+    'transition': 'fade',
+    'shuffle': False
+}
+
+# Window Settings
+INITIAL_WINDOW_WIDTH = 800
+INITIAL_WINDOW_HEIGHT = 600
+WINDOW_SIZE_PERCENT = 0.8  # 80% of screen size for non-fullscreen mode
+
+# Transition Settings
+TRANSITION_DURATION = 500  # milliseconds
+TRANSITION_STEPS = 20
+BLINDS_COUNT = 40  # Number of vertical blinds
+
+# Cache Settings
+MAX_CACHE_SIZE = 10  # Maximum number of images to cache
+MAX_CACHE_MEMORY = 100 * 1024 * 1024  # 100MB max cache size
+
+# Error Handling
+MAX_IMAGE_FAILURES = 3  # Maximum number of consecutive image load failures before stopping
+
 # Supported image formats
 IMAGE_EXTENSIONS = ['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp']
 
@@ -133,78 +159,76 @@ class TransitionManager(QObject):
 
     def blinds_transition(self, painter: QPainter, rect: QRect, progress: float) -> None:
         """Vertical blinds transition effect"""
-        w, h = rect.width(), rect.height()
+        # Get the centered rectangles for both images
+        current_rect = self.get_centered_rect(self.current_pixmap, rect)
+        next_rect = self.get_centered_rect(self.next_pixmap, rect)
         
         # Number of blinds (vertical slices)
-        num_blinds = 20
-        blind_width = w // num_blinds
+        num_blinds = BLINDS_COUNT
+        blind_width = current_rect.width() // num_blinds
         
         # Draw the current image as base
-        painter.drawPixmap(self.get_centered_rect(self.current_pixmap, rect), self.current_pixmap)
+        painter.drawPixmap(current_rect, self.current_pixmap)
         
         # Draw the next image in vertical strips
         for i in range(num_blinds):
             # Calculate the opening of each blind based on progress
-            # Add slight delay for each successive blind
-            blind_progress = progress * 1.5 - (i * 0.05)
-            
-            # Ensure progress is between 0 and 1
-            blind_progress = max(0, min(1, blind_progress))
+            blind_progress = progress
             
             if blind_progress > 0:
                 # Calculate blind position and width
-                blind_x = i * blind_width
+                blind_x = current_rect.x() + (i * blind_width)
                 
                 # Create source rectangle from the next image
-                source_rect = QRect(blind_x, 0, blind_width, h)
+                source_rect = QRect(i * blind_width, 0, blind_width, current_rect.height())
                 
                 # Create target rectangle in the current view
-                target_rect = QRect(blind_x, 0, blind_width * blind_progress, h)
+                target_rect = QRect(blind_x, current_rect.y(), blind_width * blind_progress, current_rect.height())
                 
                 # Draw this slice of the next image
                 painter.drawPixmap(target_rect, self.next_pixmap, source_rect)
 
     def slide_transition(self, painter: QPainter, rect: QRect, progress: float, direction: str) -> None:
         """Slide transition effect in the specified direction"""
-        w, h = rect.width(), rect.height()
+        # Get the centered rectangles for both images
         current_rect = self.get_centered_rect(self.current_pixmap, rect)
         next_rect = self.get_centered_rect(self.next_pixmap, rect)
 
         if direction == 'left':
             # Current image moves left
-            current_x = current_rect.x() - w * progress
+            current_x = current_rect.x() - current_rect.width() * progress
             # Next image comes from right
-            next_x = current_rect.x() + w - (w * progress)
+            next_x = current_rect.x() + current_rect.width() - (current_rect.width() * progress)
 
-            painter.drawPixmap(QRect(current_x, current_rect.y(), w, h), self.current_pixmap)
-            painter.drawPixmap(QRect(next_x, next_rect.y(), w, h), self.next_pixmap)
+            painter.drawPixmap(QRect(current_x, current_rect.y(), current_rect.width(), current_rect.height()), self.current_pixmap)
+            painter.drawPixmap(QRect(next_x, next_rect.y(), next_rect.width(), next_rect.height()), self.next_pixmap)
 
         elif direction == 'right':
             # Current image moves right
-            current_x = current_rect.x() + w * progress
+            current_x = current_rect.x() + current_rect.width() * progress
             # Next image comes from left
-            next_x = current_rect.x() - (w - (w * progress))
+            next_x = current_rect.x() - (current_rect.width() - (current_rect.width() * progress))
 
-            painter.drawPixmap(QRect(current_x, current_rect.y(), w, h), self.current_pixmap)
-            painter.drawPixmap(QRect(next_x, next_rect.y(), w, h), self.next_pixmap)
+            painter.drawPixmap(QRect(current_x, current_rect.y(), current_rect.width(), current_rect.height()), self.current_pixmap)
+            painter.drawPixmap(QRect(next_x, next_rect.y(), next_rect.width(), next_rect.height()), self.next_pixmap)
 
         elif direction == 'up':
             # Current image moves up
-            current_y = current_rect.y() - h * progress
+            current_y = current_rect.y() - current_rect.height() * progress
             # Next image comes from bottom
-            next_y = current_rect.y() + h - (h * progress)
+            next_y = current_rect.y() + current_rect.height() - (current_rect.height() * progress)
 
-            painter.drawPixmap(QRect(current_rect.x(), current_y, w, h), self.current_pixmap)
-            painter.drawPixmap(QRect(next_rect.x(), next_y, w, h), self.next_pixmap)
+            painter.drawPixmap(QRect(current_rect.x(), current_y, current_rect.width(), current_rect.height()), self.current_pixmap)
+            painter.drawPixmap(QRect(next_rect.x(), next_y, next_rect.width(), next_rect.height()), self.next_pixmap)
 
         elif direction == 'down':
             # Current image moves down
-            current_y = current_rect.y() + h * progress
+            current_y = current_rect.y() + current_rect.height() * progress
             # Next image comes from top
-            next_y = current_rect.y() - (h - (h * progress))
+            next_y = current_rect.y() - (current_rect.height() - (current_rect.height() * progress))
 
-            painter.drawPixmap(QRect(current_rect.x(), current_y, w, h), self.current_pixmap)
-            painter.drawPixmap(QRect(next_rect.x(), next_y, w, h), self.next_pixmap)
+            painter.drawPixmap(QRect(current_rect.x(), current_y, current_rect.width(), current_rect.height()), self.current_pixmap)
+            painter.drawPixmap(QRect(next_rect.x(), next_y, next_rect.width(), next_rect.height()), self.next_pixmap)
 
     def slide_random_transition(self, painter: QPainter, rect: QRect, progress: float) -> None:
         """Random slide transition that uses a different direction each time"""
@@ -225,8 +249,8 @@ class SlideshowWidget(QWidget):
         
         # Cache for scaled images
         self.image_cache = {}
-        self.cache_size = 10  # Maximum number of images to cache
-        self.max_cache_size = 100 * 1024 * 1024  # 100MB max cache size
+        self.cache_size = MAX_CACHE_SIZE
+        self.max_cache_size = MAX_CACHE_MEMORY
 
         # Animation state
         self.animation_progress = 0.0
@@ -238,8 +262,8 @@ class SlideshowWidget(QWidget):
         # Animation timer
         self.animation_timer = QTimer(self)
         self.animation_timer.timeout.connect(self.update_animation)
-        self.animation_duration = 500  # milliseconds
-        self.animation_steps = 20
+        self.animation_duration = TRANSITION_DURATION
+        self.animation_steps = TRANSITION_STEPS
         self.animation_step = 0
 
         # Set background to black
@@ -400,13 +424,7 @@ class SlideshowWindow(QMainWindow):
         super().__init__()
 
         # Default configuration
-        self.config = {
-            'folder': '.',
-            'duration': 5,
-            'monitor': 0,
-            'transition': 'fade',
-            'shuffle': False
-        }
+        self.config = DEFAULT_CONFIG.copy()
 
         # Image list
         self.images = []
@@ -417,7 +435,7 @@ class SlideshowWindow(QMainWindow):
         self.is_fullscreen = False
         self.is_paused = False
         self.failed_image_count = 0  # Track consecutive image load failures
-        self.max_failures = 3  # Maximum number of consecutive failures before stopping
+        self.max_failures = MAX_IMAGE_FAILURES
 
         # Initialize UI
         self.init_ui()
@@ -471,7 +489,7 @@ class SlideshowWindow(QMainWindow):
         self.setWindowTitle("Slideshow")
         
         # Set a reasonable initial size that's not too large
-        self.resize(800, 600)
+        self.resize(INITIAL_WINDOW_WIDTH, INITIAL_WINDOW_HEIGHT)
 
         # Create central widget
         self.slideshow_widget = SlideshowWidget(self)
@@ -493,8 +511,8 @@ class SlideshowWindow(QMainWindow):
 
         # Get the screen size
         screen = QGuiApplication.primaryScreen().geometry()
-        max_width = int(screen.width() * 0.8)  # 80% of screen width
-        max_height = int(screen.height() * 0.8)  # 80% of screen height
+        max_width = int(screen.width() * WINDOW_SIZE_PERCENT)  # 80% of screen width
+        max_height = int(screen.height() * WINDOW_SIZE_PERCENT)  # 80% of screen height
 
         # Calculate aspect ratio
         image_ratio = pixmap.width() / pixmap.height()
@@ -552,8 +570,8 @@ class SlideshowWindow(QMainWindow):
             self.images.extend(list(folder_path.glob(f"*{ext}")))
             self.images.extend(list(folder_path.glob(f"*{ext.upper()}")))
 
-        # Exit if no images found during initial load
-        if not self.images:
+        # Only exit if no images found during initial load (when current_index is -1)
+        if not self.images and self.current_index == -1:
             print(f"No images found in {folder_path}")
             sys.exit(1)
 
@@ -582,6 +600,7 @@ class SlideshowWindow(QMainWindow):
         # If no images remain, stop the timer and keep current image displayed
         if not self.images:
             self.slide_timer.stop()
+            print(f"All images have been deleted from {path}. Last image will remain displayed.")
             self.statusBar().showMessage("No images in folder - last image remains displayed")
             return
             

@@ -574,9 +574,15 @@ class SlideshowWindow(QMainWindow):
             sys.exit(1)
 
         # Find image files in the folder
-        for ext in IMAGE_EXTENSIONS:
-            self.images.extend(list(folder_path.glob(f"*{ext}")))
-            self.images.extend(list(folder_path.glob(f"*{ext.upper()}")))
+        # On Windows, we only need to search once since it's case-insensitive
+        if sys.platform == 'win32':
+            for ext in IMAGE_EXTENSIONS:
+                self.images.extend(list(folder_path.glob(f"*{ext}")))
+        else:
+            # On case-sensitive systems (Linux, macOS), search for both cases
+            for ext in IMAGE_EXTENSIONS:
+                self.images.extend(list(folder_path.glob(f"*{ext}")))
+                self.images.extend(list(folder_path.glob(f"*{ext.upper()}")))
 
         # Only exit if no images found during initial load (when current_index is -1)
         if not self.images and self.current_index == -1:

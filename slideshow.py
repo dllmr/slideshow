@@ -83,6 +83,9 @@ MAX_CACHE_MEMORY = 100 * 1024 * 1024  # 100MB max cache size
 # Error Handling
 MAX_IMAGE_FAILURES = 3  # Maximum number of consecutive image load failures before stopping
 
+# File System Settings
+FOLDER_CHANGE_DEBOUNCE = 500  # milliseconds to wait before processing folder changes
+
 # Supported image formats
 IMAGE_EXTENSIONS = ['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp']
 
@@ -161,7 +164,6 @@ class TransitionManager(QObject):
         """Vertical blinds transition effect"""
         # Get the centered rectangles for both images
         current_rect = self.get_centered_rect(self.current_pixmap, rect)
-        next_rect = self.get_centered_rect(self.next_pixmap, rect)
         
         # Number of blinds (vertical slices)
         num_blinds = BLINDS_COUNT
@@ -456,6 +458,12 @@ class SlideshowWindow(QMainWindow):
         if folder_path.exists() and folder_path.is_dir():
             self.fs_watcher.addPath(str(folder_path))
 
+        # Set up debounce timer for folder changes
+        self.folder_change_timer = QTimer(self)
+        self.folder_change_timer.setSingleShot(True)
+        self.folder_change_timer.timeout.connect(self.process_folder_changes)
+        self.pending_folder_changes = None
+
         # Set up slide timer
         self.slide_timer = QTimer(self)
         self.slide_timer.timeout.connect(self.next_slide)
@@ -586,7 +594,18 @@ class SlideshowWindow(QMainWindow):
             print(f"Found {len(self.images)} images in {folder_path}")
 
     def handle_folder_changes(self, path: str) -> None:
-        """Handle changes to the image folder"""
+        """Handle changes to the image folder with debouncing"""
+        self.pending_folder_changes = path
+        self.folder_change_timer.start(FOLDER_CHANGE_DEBOUNCE)
+
+    def process_folder_changes(self) -> None:
+        """Process the folder changes after debounce delay"""
+        if self.pending_folder_changes is None:
+            return
+
+        path = self.pending_folder_changes
+        self.pending_folder_changes = None
+
         # Get current image path before updating list
         current_path = None
         if self.images and 0 <= self.current_index < len(self.images):
@@ -812,6 +831,7 @@ class SlideshowWindow(QMainWindow):
     def closeEvent(self, event) -> None:
         """Handle window close event"""
         self.slide_timer.stop()
+        self.folder_change_timer.stop()
         # Remove file system watcher
         if self.fs_watcher:
             self.fs_watcher.removePath(str(Path(self.config['folder'])))

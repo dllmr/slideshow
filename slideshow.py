@@ -72,8 +72,8 @@ INITIAL_WINDOW_HEIGHT = 600
 WINDOW_SIZE_PERCENT = 0.8  # 80% of screen size for non-fullscreen mode
 
 # Transition Settings
-TRANSITION_DURATION = 500  # milliseconds
-TRANSITION_STEPS = 20
+TRANSITION_DURATION = 1000  # milliseconds
+TRANSITION_STEPS = 60
 BLINDS_COUNT = 40  # Number of vertical blinds
 
 # Cache Settings
@@ -138,9 +138,16 @@ class TransitionManager(QObject):
         transition_func(painter, rect, progress)
 
     def get_centered_rect(self, pixmap: QPixmap, rect: QRect) -> QRect:
-        """Calculate the centered rectangle for the pixmap"""
-        x = (rect.width() - pixmap.width()) // 2
-        y = (rect.height() - pixmap.height()) // 2
+        """Calculate the centered rectangle for the pixmap.
+        This is needed to properly position images in the widget when in windowed mode."""
+        if pixmap.width() == rect.width() and pixmap.height() == rect.height():
+            # If the pixmap is already exactly the same size as the rect, just return the rect
+            return rect
+            
+        # Otherwise calculate the centered position
+        x = rect.x() + (rect.width() - pixmap.width()) // 2
+        y = rect.y() + (rect.height() - pixmap.height()) // 2
+        
         return QRect(x, y, pixmap.width(), pixmap.height())
 
     def no_transition(self, painter: QPainter, rect: QRect, progress: float) -> None:
@@ -162,75 +169,125 @@ class TransitionManager(QObject):
 
     def blinds_transition(self, painter: QPainter, rect: QRect, progress: float) -> None:
         """Vertical blinds transition effect"""
-        # Get the centered rectangles for both images
+        # Get positioned rectangles for both images
         current_rect = self.get_centered_rect(self.current_pixmap, rect)
+        next_rect = self.get_centered_rect(self.next_pixmap, rect)
         
-        # Number of blinds (vertical slices)
-        num_blinds = BLINDS_COUNT
-        blind_width = current_rect.width() // num_blinds
+        # Fill the background with black (in case the widget is larger than images)
+        painter.fillRect(rect, QColor(0, 0, 0))
         
-        # Draw the current image as base
+        # Don't proceed if progress is 0
+        if progress <= 0:
+            painter.drawPixmap(current_rect, self.current_pixmap)
+            return
+            
+        # First draw the current image as the base
         painter.drawPixmap(current_rect, self.current_pixmap)
         
-        # Draw the next image in vertical strips
+        # Number of blinds (vertical strips)
+        num_blinds = BLINDS_COUNT
+        
+        # Use ceiling division to ensure we don't get gaps due to rounding
+        blind_width = current_rect.width() / num_blinds
+        
+        # With PySide6, we need to use QPainterPath to combine clip regions
+        from PySide6.QtGui import QPainterPath
+        clip_path = QPainterPath()
+        
         for i in range(num_blinds):
-            # Calculate the opening of each blind based on progress
-            blind_progress = progress
+            # Calculate blind position (ensure integers to avoid pixel gaps)
+            blind_x = current_rect.x() + int(i * blind_width)
             
-            if blind_progress > 0:
-                # Calculate blind position and width
-                blind_x = current_rect.x() + (i * blind_width)
+            # Calculate the width of the blind opening, ensure it fills the entire blind width when progress=1
+            # Use the next blind position to ensure no gaps
+            next_blind_x = current_rect.x() + int((i+1) * blind_width)
+            this_blind_width = next_blind_x - blind_x
+            open_width = int(this_blind_width * progress)
+            
+            # Skip if nothing to draw
+            if open_width <= 0:
+                continue
                 
-                # Create source rectangle from the next image
-                source_rect = QRect(i * blind_width, 0, blind_width, current_rect.height())
-                
-                # Create target rectangle in the current view
-                target_rect = QRect(blind_x, current_rect.y(), blind_width * blind_progress, current_rect.height())
-                
-                # Draw this slice of the next image
-                painter.drawPixmap(target_rect, self.next_pixmap, source_rect)
+            # For even-indexed blinds, align from left
+            # For odd-indexed blinds, align from right
+            if i % 2 == 0:
+                blind_start_x = blind_x
+            else:
+                blind_start_x = next_blind_x - open_width
+            
+            # Add this rect to the clip path
+            clip_rect = QRect(
+                blind_start_x, current_rect.y(), 
+                open_width, current_rect.height()
+            )
+            clip_path.addRect(clip_rect)
+        
+        # Apply the combined clip path
+        painter.save()
+        painter.setClipPath(clip_path)
+        
+        # Draw next image through all clip regions at once
+        painter.drawPixmap(next_rect, self.next_pixmap)
+        
+        # Restore painter state (removes clipping)
+        painter.restore()
 
     def slide_transition(self, painter: QPainter, rect: QRect, progress: float, direction: str) -> None:
         """Slide transition effect in the specified direction"""
         # Get the centered rectangles for both images
         current_rect = self.get_centered_rect(self.current_pixmap, rect)
         next_rect = self.get_centered_rect(self.next_pixmap, rect)
+        
+        # Store the original positions for reference
+        current_original_x = current_rect.x()
+        current_original_y = current_rect.y()
+        
+        # Fill background with black
+        painter.fillRect(rect, QColor(0, 0, 0))
 
         if direction == 'left':
             # Current image moves left
-            current_x = current_rect.x() - current_rect.width() * progress
+            current_x = current_original_x - rect.width() * progress
             # Next image comes from right
-            next_x = current_rect.x() + current_rect.width() - (current_rect.width() * progress)
+            next_x = current_original_x + rect.width() * (1.0 - progress)
 
-            painter.drawPixmap(QRect(current_x, current_rect.y(), current_rect.width(), current_rect.height()), self.current_pixmap)
-            painter.drawPixmap(QRect(next_x, next_rect.y(), next_rect.width(), next_rect.height()), self.next_pixmap)
+            painter.drawPixmap(QRect(current_x, current_original_y, current_rect.width(), current_rect.height()), 
+                              self.current_pixmap)
+            painter.drawPixmap(QRect(next_x, current_original_y, next_rect.width(), next_rect.height()), 
+                              self.next_pixmap)
 
         elif direction == 'right':
             # Current image moves right
-            current_x = current_rect.x() + current_rect.width() * progress
+            current_x = current_original_x + rect.width() * progress
             # Next image comes from left
-            next_x = current_rect.x() - (current_rect.width() - (current_rect.width() * progress))
+            next_x = current_original_x - rect.width() * (1.0 - progress)
 
-            painter.drawPixmap(QRect(current_x, current_rect.y(), current_rect.width(), current_rect.height()), self.current_pixmap)
-            painter.drawPixmap(QRect(next_x, next_rect.y(), next_rect.width(), next_rect.height()), self.next_pixmap)
+            painter.drawPixmap(QRect(current_x, current_original_y, current_rect.width(), current_rect.height()), 
+                              self.current_pixmap)
+            painter.drawPixmap(QRect(next_x, current_original_y, next_rect.width(), next_rect.height()), 
+                              self.next_pixmap)
 
         elif direction == 'up':
             # Current image moves up
-            current_y = current_rect.y() - current_rect.height() * progress
+            current_y = current_original_y - rect.height() * progress
             # Next image comes from bottom
-            next_y = current_rect.y() + current_rect.height() - (current_rect.height() * progress)
+            next_y = current_original_y + rect.height() * (1.0 - progress)
 
-            painter.drawPixmap(QRect(current_rect.x(), current_y, current_rect.width(), current_rect.height()), self.current_pixmap)
-            painter.drawPixmap(QRect(next_rect.x(), next_y, next_rect.width(), next_rect.height()), self.next_pixmap)
+            painter.drawPixmap(QRect(current_original_x, current_y, current_rect.width(), current_rect.height()), 
+                              self.current_pixmap)
+            painter.drawPixmap(QRect(current_original_x, next_y, next_rect.width(), next_rect.height()), 
+                              self.next_pixmap)
 
         elif direction == 'down':
             # Current image moves down
-            current_y = current_rect.y() + current_rect.height() * progress
+            current_y = current_original_y + rect.height() * progress
             # Next image comes from top
-            next_y = current_rect.y() - (current_rect.height() - (current_rect.height() * progress))
+            next_y = current_original_y - rect.height() * (1.0 - progress)
 
-            painter.drawPixmap(QRect(current_rect.x(), current_y, current_rect.width(), current_rect.height()), self.current_pixmap)
-            painter.drawPixmap(QRect(next_rect.x(), next_y, next_rect.width(), next_rect.height()), self.next_pixmap)
+            painter.drawPixmap(QRect(current_original_x, current_y, current_rect.width(), current_rect.height()), 
+                              self.current_pixmap)
+            painter.drawPixmap(QRect(current_original_x, next_y, next_rect.width(), next_rect.height()), 
+                              self.next_pixmap)
 
     def slide_random_transition(self, painter: QPainter, rect: QRect, progress: float) -> None:
         """Random slide transition that uses a different direction each time"""
@@ -312,7 +369,8 @@ class SlideshowWidget(QWidget):
             self.scaled_next = self.scale_pixmap(self.next_image)
 
     def scale_pixmap(self, pixmap: QPixmap) -> QPixmap:
-        """Scale a pixmap to fit widget size while maintaining aspect ratio"""
+        """Scale a pixmap to fit widget size while maintaining aspect ratio.
+        This maintains the original proportions of the already pre-formatted image."""
         if pixmap.isNull():
             return QPixmap()
 
@@ -323,22 +381,10 @@ class SlideshowWidget(QWidget):
         if cache_key in self.image_cache:
             return self.image_cache[cache_key]
 
-        # Calculate the scaled size while maintaining aspect ratio
-        image_ratio = pixmap.width() / pixmap.height()
-        widget_ratio = self.width() / self.height()
-
-        if image_ratio > widget_ratio:
-            # Image is wider than widget ratio
-            scaled_width = self.width()
-            scaled_height = int(scaled_width / image_ratio)
-        else:
-            # Image is taller than widget ratio
-            scaled_height = self.height()
-            scaled_width = int(scaled_height * image_ratio)
-
-        # Scale the image
+        # For pre-formatted images (which already have letterboxing/pillarboxing),
+        # we want to scale the entire image uniformly to fit the widget
         scaled = pixmap.scaled(
-            scaled_width, scaled_height,
+            self.width(), self.height(),
             Qt.KeepAspectRatio, Qt.SmoothTransformation
         )
 
@@ -438,6 +484,14 @@ class SlideshowWindow(QMainWindow):
         self.is_paused = False
         self.failed_image_count = 0  # Track consecutive image load failures
         self.max_failures = MAX_IMAGE_FAILURES
+
+        # Monitor dimensions
+        self.monitor_width = 0
+        self.monitor_height = 0
+        
+        # Cache for monitor-scaled images
+        self.monitor_scaled_cache = {}
+        self.monitor_cache_size = MAX_CACHE_SIZE
 
         # Initialize UI
         self.init_ui()
@@ -541,14 +595,14 @@ class SlideshowWindow(QMainWindow):
     def parse_args(self) -> None:
         """Parse command line arguments"""
         parser = argparse.ArgumentParser(description="Full-Screen Image Slideshow")
-        parser.add_argument("--folder", help="Path to folder with images", default=None)
-        parser.add_argument("--duration", type=int, help="Seconds to display each image", default=None)
-        parser.add_argument("--monitor", type=int, help="Monitor index to use", default=None)
-        parser.add_argument("--transition", help="Transition effect to use",
+        parser.add_argument("-f", "--folder", help="Path to folder with images", default=None)
+        parser.add_argument("-d", "--duration", type=int, help="Seconds to display each image", default=None)
+        parser.add_argument("-m", "--monitor", type=int, help="Monitor index to use", default=None)
+        parser.add_argument("-t", "--transition", help="Transition effect to use",
                          choices=["fade", "slide_left", "slide_right", "slide_up", "slide_down", 
                                  "slide_random", "blinds", "none"],
                          default=None)
-        parser.add_argument("--shuffle", action="store_true", help="Randomize the order of images")
+        parser.add_argument("-s", "--shuffle", action="store_true", help="Randomize the order of images")
 
         args = parser.parse_args()
 
@@ -686,6 +740,12 @@ class SlideshowWindow(QMainWindow):
         # Get screen geometry
         screen = screens[monitor_index]
         screen_geometry = screen.geometry()
+        
+        # Store monitor dimensions and clear cache if dimensions change
+        if self.monitor_width != screen_geometry.width() or self.monitor_height != screen_geometry.height():
+            self.monitor_width = screen_geometry.width()
+            self.monitor_height = screen_geometry.height()
+            self.clear_monitor_cache()
 
         # Move and resize window to fill the screen
         self.setGeometry(screen_geometry)
@@ -759,6 +819,11 @@ class SlideshowWindow(QMainWindow):
 
                 # Reset failure count on successful load
                 self.failed_image_count = 0
+                
+                # Resize image to monitor dimensions while preserving aspect ratio
+                # This ensures all images have a consistent size based on the monitor dimensions,
+                # which helps make transitions between images of different aspect ratios look smoother
+                pixmap = self.resize_image_to_monitor(pixmap)
 
                 # If this is the very first image shown (slideshow just started)
                 # or if there's only one image, don't use transition
@@ -794,8 +859,9 @@ class SlideshowWindow(QMainWindow):
         if self.is_paused:
             self.slide_timer.stop()
             self.statusBar().showMessage("Slideshow paused")
-            # Clear cache when paused to save memory
+            # Clear caches when paused to save memory
             self.slideshow_widget.clear_cache()
+            self.clear_monitor_cache()
         else:
             self.slide_timer.start(self.config['duration'] * 1000)
             self.statusBar().showMessage("Slideshow resumed")
@@ -848,7 +914,74 @@ class SlideshowWindow(QMainWindow):
             self.slideshow_widget.scaled_current = QPixmap()
             self.slideshow_widget.scaled_next = QPixmap()
             self.slideshow_widget.clear_cache()
+        # Clear monitor cache
+        self.clear_monitor_cache()
         event.accept()
+
+    def resize_image_to_monitor(self, pixmap: QPixmap) -> QPixmap:
+        """Resize an image to exactly match the target dimensions
+        This ensures all images have the same exact size, with black bars as needed"""
+        if pixmap.isNull() or self.monitor_width <= 0 or self.monitor_height <= 0:
+            return pixmap
+            
+        # Create a cache key based on the image and monitor dimensions
+        cache_key = (pixmap.cacheKey(), self.monitor_width, self.monitor_height)
+        
+        # Check if we have a cached version
+        if cache_key in self.monitor_scaled_cache:
+            return self.monitor_scaled_cache[cache_key]
+            
+        # Calculate target dimensions - we'll use these dimensions consistently
+        # regardless of whether we're in fullscreen or windowed mode
+        target_width = self.monitor_width
+        target_height = self.monitor_height
+        
+        # Create a new pixmap with the target dimensions (filled with black)
+        result = QPixmap(target_width, target_height)
+        result.fill(QColor(0, 0, 0))
+        
+        # Calculate aspect ratios
+        image_ratio = pixmap.width() / pixmap.height()
+        target_ratio = target_width / target_height
+        
+        # Scale the image while preserving aspect ratio
+        if image_ratio > target_ratio:
+            # Image is wider than target ratio (letterboxing - black bars on top/bottom)
+            scaled_width = target_width
+            scaled_height = int(scaled_width / image_ratio)
+        else:
+            # Image is taller than target ratio (pillarboxing - black bars on sides)
+            scaled_height = target_height
+            scaled_width = int(scaled_height * image_ratio)
+            
+        # Scale the original image
+        scaled_img = pixmap.scaled(
+            scaled_width, scaled_height,
+            Qt.KeepAspectRatio, Qt.SmoothTransformation
+        )
+        
+        # Calculate centered position
+        x = (target_width - scaled_img.width()) // 2
+        y = (target_height - scaled_img.height()) // 2
+        
+        # Paint the scaled image onto the black background
+        painter = QPainter(result)
+        painter.drawPixmap(x, y, scaled_img)
+        painter.end()
+        
+        # Manage cache size
+        if len(self.monitor_scaled_cache) >= self.monitor_cache_size:
+            # Remove oldest entry
+            self.monitor_scaled_cache.pop(next(iter(self.monitor_scaled_cache)))
+            
+        # Add to cache
+        self.monitor_scaled_cache[cache_key] = result
+        
+        return result
+        
+    def clear_monitor_cache(self) -> None:
+        """Clear the monitor-scaled image cache"""
+        self.monitor_scaled_cache.clear()
 
 
 def main():

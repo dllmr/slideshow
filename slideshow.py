@@ -39,6 +39,7 @@ import sys
 import random
 import argparse
 from pathlib import Path
+from typing import Dict, List, Tuple, Set, Callable, Optional, Any, TypedDict
 
 # Check Python version - require exactly 3.12.x
 import platform
@@ -57,8 +58,16 @@ except ImportError:
     print("PySide6 is required. Install it with: pip install PySide6")
     sys.exit(1)
 
+# Configuration Types
+class ConfigDict(TypedDict):
+    folders: List[str]
+    duration: int
+    monitor: int
+    transition: str
+    shuffle: bool
+
 # Configuration Constants
-DEFAULT_CONFIG = {
+DEFAULT_CONFIG: ConfigDict = {
     'folders': ['.'],  # Changed from 'folder' to 'folders' list
     'duration': 5,
     'monitor': 0,
@@ -67,40 +76,45 @@ DEFAULT_CONFIG = {
 }
 
 # Window Settings
-INITIAL_WINDOW_WIDTH = 800
-INITIAL_WINDOW_HEIGHT = 600
-WINDOW_SIZE_PERCENT = 0.8  # 80% of screen size for non-fullscreen mode
+INITIAL_WINDOW_WIDTH: int = 800
+INITIAL_WINDOW_HEIGHT: int = 600
+WINDOW_SIZE_PERCENT: float = 0.8  # 80% of screen size for non-fullscreen mode
 
 # Transition Settings
-TRANSITION_DURATION = 1000  # milliseconds
-TRANSITION_STEPS = 60
-BLINDS_COUNT = 40  # Number of vertical blinds
+TRANSITION_DURATION: int = 1000  # milliseconds
+TRANSITION_STEPS: int = 60
+BLINDS_COUNT: int = 40  # Number of vertical blinds
 
 # Cache Settings
-MAX_CACHE_SIZE = 10  # Maximum number of images to cache
-MAX_CACHE_MEMORY = 100 * 1024 * 1024  # 100MB max cache size
+MAX_CACHE_SIZE: int = 10  # Maximum number of images to cache
+MAX_CACHE_MEMORY: int = 100 * 1024 * 1024  # 100MB max cache size
 
 # Error Handling
-MAX_IMAGE_FAILURES = 3  # Maximum number of consecutive image load failures before stopping
+MAX_IMAGE_FAILURES: int = 3  # Maximum number of consecutive image load failures before stopping
 
 # File System Settings
-FOLDER_CHANGE_DEBOUNCE = 500  # milliseconds to wait before processing folder changes
+FOLDER_CHANGE_DEBOUNCE: int = 500  # milliseconds to wait before processing folder changes
 
 # Supported image formats
-IMAGE_EXTENSIONS = ['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp']
+IMAGE_EXTENSIONS: List[str] = ['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp']
+
+# Type aliases
+TransitionFunc = Callable[[QPainter, QRect, float], None]
+ImagePathInfo = Tuple[Path, int]  # (path, folder_index)
+CacheKey = Tuple[int, int, int]  # (pixmap.cacheKey(), width, height)
 
 class TransitionManager(QObject):
     """Manages different transition effects between images"""
 
-    def __init__(self, parent=None):
+    def __init__(self, parent: Optional[QObject] = None) -> None:
         super().__init__(parent)
-        self.current_pixmap = None
-        self.next_pixmap = None
-        self.progress = 0.0
-        self.current_random_direction = 'right'  # Default direction
+        self.current_pixmap: Optional[QPixmap] = None
+        self.next_pixmap: Optional[QPixmap] = None
+        self.progress: float = 0.0
+        self.current_random_direction: str = 'right'  # Default direction
 
         # Available transition types
-        self.transitions = {
+        self.transitions: Dict[str, TransitionFunc] = {
             'none': self.no_transition,
             'fade': self.fade_transition,
             'slide_left': lambda p, c, n: self.slide_transition(p, c, n, 'left'),
@@ -111,7 +125,7 @@ class TransitionManager(QObject):
             'slide_random': self.slide_random_transition,
         }
 
-        self.transition_type = 'fade'
+        self.transition_type: str = 'fade'
 
     def set_transition(self, transition_name: str) -> None:
         """Set the current transition effect"""
@@ -297,33 +311,33 @@ class TransitionManager(QObject):
 class SlideshowWidget(QWidget):
     """Widget that displays images with transition effects"""
 
-    def __init__(self, parent=None):
+    def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
 
         # Image data
-        self.current_image = QPixmap()
-        self.next_image = QPixmap()
-        self.scaled_current = QPixmap()
-        self.scaled_next = QPixmap()
+        self.current_image: QPixmap = QPixmap()
+        self.next_image: QPixmap = QPixmap()
+        self.scaled_current: QPixmap = QPixmap()
+        self.scaled_next: QPixmap = QPixmap()
         
         # Cache for scaled images
-        self.image_cache = {}
-        self.cache_size = MAX_CACHE_SIZE
-        self.max_cache_size = MAX_CACHE_MEMORY
+        self.image_cache: Dict[CacheKey, QPixmap] = {}
+        self.cache_size: int = MAX_CACHE_SIZE
+        self.max_cache_size: int = MAX_CACHE_MEMORY
 
         # Animation state
-        self.animation_progress = 0.0
-        self.in_transition = False
+        self.animation_progress: float = 0.0
+        self.in_transition: bool = False
 
         # Transition manager
-        self.transition_mgr = TransitionManager(self)
+        self.transition_mgr: TransitionManager = TransitionManager(self)
 
         # Animation timer
-        self.animation_timer = QTimer(self)
+        self.animation_timer: QTimer = QTimer(self)
         self.animation_timer.timeout.connect(self.update_animation)
-        self.animation_duration = TRANSITION_DURATION
-        self.animation_steps = TRANSITION_STEPS
-        self.animation_step = 0
+        self.animation_duration: int = TRANSITION_DURATION
+        self.animation_steps: int = TRANSITION_STEPS
+        self.animation_step: int = 0
 
         # Set background to black
         self.setAutoFillBackground(True)
@@ -375,7 +389,7 @@ class SlideshowWidget(QWidget):
             return QPixmap()
 
         # Create a cache key based on the image and current size
-        cache_key = (pixmap.cacheKey(), self.width(), self.height())
+        cache_key: CacheKey = (pixmap.cacheKey(), self.width(), self.height())
         
         # Check if we have a cached version
         if cache_key in self.image_cache:
@@ -430,7 +444,7 @@ class SlideshowWidget(QWidget):
         """Set the transition effect type"""
         self.transition_mgr.set_transition(transition_type)
 
-    def paintEvent(self, event) -> None:
+    def paintEvent(self, event: Any) -> None:
         """Paint the widget"""
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)
@@ -447,7 +461,7 @@ class SlideshowWidget(QWidget):
             y = (rect.height() - self.scaled_current.height()) // 2
             painter.drawPixmap(x, y, self.scaled_current)
 
-    def resizeEvent(self, event) -> None:
+    def resizeEvent(self, event: Any) -> None:
         """Handle resize events"""
         super().resizeEvent(event)
         # Clear cache when window is resized
@@ -458,7 +472,7 @@ class SlideshowWidget(QWidget):
         if self.in_transition:
             self.transition_mgr.set_images(self.scaled_current, self.scaled_next)
 
-    def closeEvent(self, event) -> None:
+    def closeEvent(self, event: Any) -> None:
         """Handle widget close event"""
         self.animation_timer.stop()
         self.clear_cache()
@@ -468,30 +482,35 @@ class SlideshowWidget(QWidget):
 class SlideshowWindow(QMainWindow):
     """Main window for the slideshow application"""
 
-    def __init__(self):
+    def __init__(self) -> None:
         super().__init__()
 
         # Default configuration
-        self.config = DEFAULT_CONFIG.copy()
+        self.config: ConfigDict = DEFAULT_CONFIG.copy()
 
         # Image list - now stores tuples of (path, folder_index)
-        self.images = []
-        self.current_index = -1
-        self.current_image_path = None  # Track current image path
+        self.images: List[ImagePathInfo] = []
+        self.current_index: int = -1
+        self.current_image_path: Optional[Path] = None  # Track current image path
 
         # State variables
-        self.is_fullscreen = False
-        self.is_paused = False
-        self.failed_image_count = 0  # Track consecutive image load failures
-        self.max_failures = MAX_IMAGE_FAILURES
+        self.is_fullscreen: bool = False
+        self.is_paused: bool = False
+        self.failed_image_count: int = 0  # Track consecutive image load failures
+        self.max_failures: int = MAX_IMAGE_FAILURES
 
         # Monitor dimensions
-        self.monitor_width = 0
-        self.monitor_height = 0
+        self.monitor_width: int = 0
+        self.monitor_height: int = 0
         
         # Cache for monitor-scaled images
-        self.monitor_scaled_cache = {}
-        self.monitor_cache_size = MAX_CACHE_SIZE
+        self.monitor_scaled_cache: Dict[CacheKey, QPixmap] = {}
+        self.monitor_cache_size: int = MAX_CACHE_SIZE
+        
+        # UI components
+        self.slideshow_widget: SlideshowWidget = None  # Will be set in init_ui
+        self.escape_action: QShortcut = None  # Will be set in setup_quit_shortcuts
+        self.q_action: QShortcut = None  # Will be set in setup_quit_shortcuts
 
         # Initialize UI
         self.init_ui()
@@ -506,17 +525,17 @@ class SlideshowWindow(QMainWindow):
         self.load_images()
 
         # Set up file system watchers for all folders
-        self.fs_watchers = []
+        self.fs_watchers: List[QFileSystemWatcher] = []
         self.setup_folder_watchers()
 
         # Set up debounce timer for folder changes
-        self.folder_change_timer = QTimer(self)
+        self.folder_change_timer: QTimer = QTimer(self)
         self.folder_change_timer.setSingleShot(True)
         self.folder_change_timer.timeout.connect(self.process_folder_changes)
-        self.pending_folder_changes = None
+        self.pending_folder_changes: Optional[str] = None
 
         # Set up slide timer
-        self.slide_timer = QTimer(self)
+        self.slide_timer: QTimer = QTimer(self)
         self.slide_timer.timeout.connect(self.next_slide)
 
         # Start slideshow
@@ -720,14 +739,14 @@ class SlideshowWindow(QMainWindow):
         self.pending_folder_changes = None
 
         # Get current image path before updating list
-        current_path = None
+        current_path: Optional[Path] = None
         if self.images and 0 <= self.current_index < len(self.images):
             current_path = self.images[self.current_index][0]
         
         # Reload images
-        old_images = set(self.images)
+        old_images: Set[ImagePathInfo] = set(self.images)
         self.load_images()
-        new_images = set(self.images)
+        new_images: Set[ImagePathInfo] = set(self.images)
         
         # If no images remain, stop the timer and keep current image displayed
         if not self.images:
@@ -753,7 +772,7 @@ class SlideshowWindow(QMainWindow):
             
         # Update current index to point to same image if it still exists
         if current_path and any(img[0] == current_path for img in new_images):
-            self.current_index = next(i for i, img in enumerate(new_images) if img[0] == current_path)
+            self.current_index = next(i for i, img in enumerate(self.images) if img[0] == current_path)
             # Update status bar
             self.statusBar().showMessage(
                 f"Image {self.current_index + 1} of {len(self.images)}: {self.images[self.current_index][0].name}"
@@ -803,7 +822,7 @@ class SlideshowWindow(QMainWindow):
         # Move and resize window to fill the screen
         self.setGeometry(screen_geometry)
 
-    def toggle_fullscreen(self, fullscreen: bool = None) -> None:
+    def toggle_fullscreen(self, fullscreen: Optional[bool] = None) -> None:
         """Toggle fullscreen mode"""
         if fullscreen is None:
             fullscreen = not self.is_fullscreen
@@ -953,7 +972,7 @@ class SlideshowWindow(QMainWindow):
             self.slide_timer.stop()
             self.prev_slide()
 
-    def closeEvent(self, event) -> None:
+    def closeEvent(self, event: Any) -> None:
         """Handle window close event"""
         self.slide_timer.stop()
         self.folder_change_timer.stop()
@@ -980,7 +999,7 @@ class SlideshowWindow(QMainWindow):
             return pixmap
             
         # Create a cache key based on the image and monitor dimensions
-        cache_key = (pixmap.cacheKey(), self.monitor_width, self.monitor_height)
+        cache_key: CacheKey = (pixmap.cacheKey(), self.monitor_width, self.monitor_height)
         
         # Check if we have a cached version
         if cache_key in self.monitor_scaled_cache:
@@ -1038,7 +1057,7 @@ class SlideshowWindow(QMainWindow):
         self.monitor_scaled_cache.clear()
 
 
-def main():
+def main() -> None:
     """Main function"""
     app = QApplication(sys.argv)
     window = SlideshowWindow()

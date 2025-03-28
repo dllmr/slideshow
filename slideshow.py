@@ -1,7 +1,7 @@
 # /// script
-# requires-python = "==3.12"
+# requires-python = "~=3.12"
 # dependencies = [
-#     "PySide6",
+#     "PySide6~=6.8",
 # ]
 # ///
 
@@ -59,7 +59,7 @@ except ImportError:
 
 # Configuration Constants
 DEFAULT_CONFIG = {
-    'folder': '.',
+    'folders': ['.'],  # Changed from 'folder' to 'folders' list
     'duration': 5,
     'monitor': 0,
     'transition': 'fade',
@@ -474,7 +474,7 @@ class SlideshowWindow(QMainWindow):
         # Default configuration
         self.config = DEFAULT_CONFIG.copy()
 
-        # Image list
+        # Image list - now stores tuples of (path, folder_index)
         self.images = []
         self.current_index = -1
         self.current_image_path = None  # Track current image path
@@ -502,15 +502,12 @@ class SlideshowWindow(QMainWindow):
         # Parse command line arguments
         self.parse_args()
 
-        # Load images from folder
+        # Load images from folders
         self.load_images()
 
-        # Set up file system watcher for the folder
-        self.fs_watcher = QFileSystemWatcher(self)
-        self.fs_watcher.directoryChanged.connect(self.handle_folder_changes)
-        folder_path = Path(self.config['folder'])
-        if folder_path.exists() and folder_path.is_dir():
-            self.fs_watcher.addPath(str(folder_path))
+        # Set up file system watchers for all folders
+        self.fs_watchers = []
+        self.setup_folder_watchers()
 
         # Set up debounce timer for folder changes
         self.folder_change_timer = QTimer(self)
@@ -535,10 +532,36 @@ class SlideshowWindow(QMainWindow):
         self.q_action = QShortcut(QKeySequence(Qt.Key_Q), self)
         self.q_action.activated.connect(self.quit_application)
     
+    def cleanup(self) -> None:
+        """Clean up resources before quitting"""
+        # Stop timers
+        self.slide_timer.stop()
+        self.folder_change_timer.stop()
+        
+        # Remove file system watchers
+        for watcher in self.fs_watchers:
+            for path in watcher.directories():
+                watcher.removePath(path)
+        self.fs_watchers.clear()
+        
+        # Clean up pixmaps and cache
+        if hasattr(self, 'slideshow_widget'):
+            self.slideshow_widget.current_image = None
+            self.slideshow_widget.next_image = None
+            self.slideshow_widget.scaled_current = None
+            self.slideshow_widget.scaled_next = None
+            self.slideshow_widget.clear_cache()
+        
+        # Clear monitor cache
+        self.clear_monitor_cache()
+        
+        # Clear image list
+        self.images.clear()
+    
     def quit_application(self) -> None:
         """Quit the application"""
-        # Stop any active timers
-        self.slide_timer.stop()
+        # Clean up resources
+        self.cleanup()
         
         # Close main window
         self.close()
@@ -592,10 +615,32 @@ class SlideshowWindow(QMainWindow):
         # Set the window size
         self.resize(width, height)
 
+    def setup_folder_watchers(self) -> None:
+        """Set up file system watchers for all folders"""
+        # Clean up existing watchers
+        for watcher in self.fs_watchers:
+            for path in watcher.directories():
+                watcher.removePath(path)
+        self.fs_watchers.clear()
+
+        # Set up new watchers
+        for folder_path in self.config['folders']:
+            path = Path(folder_path)
+            if path.exists() and path.is_dir():
+                try:
+                    watcher = QFileSystemWatcher(self)
+                    watcher.directoryChanged.connect(self.handle_folder_changes)
+                    if watcher.addPath(str(path)):
+                        self.fs_watchers.append(watcher)
+                    else:
+                        print(f"Warning: Failed to add watcher for folder: {path}")
+                except Exception as e:
+                    print(f"Error setting up watcher for folder {path}: {e}")
+
     def parse_args(self) -> None:
         """Parse command line arguments"""
         parser = argparse.ArgumentParser(description="Full-Screen Image Slideshow")
-        parser.add_argument("-f", "--folder", help="Path to folder with images", default=None)
+        parser.add_argument("-f", "--folder", action="append", help="Path to folder with images (can be specified multiple times)")
         parser.add_argument("-d", "--duration", type=int, help="Seconds to display each image", default=None)
         parser.add_argument("-m", "--monitor", type=int, help="Monitor index to use", default=None)
         parser.add_argument("-t", "--transition", help="Transition effect to use",
@@ -608,7 +653,7 @@ class SlideshowWindow(QMainWindow):
 
         # Override configuration with command line arguments if provided
         if args.folder is not None:
-            self.config['folder'] = args.folder
+            self.config['folders'] = args.folder
         if args.duration is not None:
             self.config['duration'] = args.duration
         if args.monitor is not None:
@@ -619,42 +664,50 @@ class SlideshowWindow(QMainWindow):
             self.config['shuffle'] = True
 
     def load_images(self) -> None:
-        """Load images from the configured folder"""
-        folder_path = Path(self.config['folder'])
+        """Load images from all configured folders"""
         self.images = []
 
-        if not folder_path.exists() or not folder_path.is_dir():
-            print(f"Error: Folder not found: {folder_path}")
-            sys.exit(1)
+        for folder_index, folder_path in enumerate(self.config['folders']):
+            folder_path = Path(folder_path)
+            if not folder_path.exists() or not folder_path.is_dir():
+                print(f"Error: Folder not found: {folder_path}")
+                continue
 
-        # Find image files in the folder
-        # On Windows, we only need to search once since it's case-insensitive
-        if sys.platform == 'win32':
-            for ext in IMAGE_EXTENSIONS:
-                self.images.extend(list(folder_path.glob(f"*{ext}")))
-        else:
-            # On case-sensitive systems (Linux, macOS), search for both cases
-            for ext in IMAGE_EXTENSIONS:
-                self.images.extend(list(folder_path.glob(f"*{ext}")))
-                self.images.extend(list(folder_path.glob(f"*{ext.upper()}")))
+            # Find image files in the folder
+            # On Windows, we only need to search once since it's case-insensitive
+            if sys.platform == 'win32':
+                for ext in IMAGE_EXTENSIONS:
+                    for img_path in folder_path.glob(f"*{ext}"):
+                        self.images.append((img_path, folder_index))
+            else:
+                # On case-sensitive systems (Linux, macOS), search for both cases
+                for ext in IMAGE_EXTENSIONS:
+                    for img_path in folder_path.glob(f"*{ext}"):
+                        self.images.append((img_path, folder_index))
+                    for img_path in folder_path.glob(f"*{ext.upper()}"):
+                        self.images.append((img_path, folder_index))
 
         # Only exit if no images found during initial load (when current_index is -1)
         if not self.images and self.current_index == -1:
-            print(f"No images found in {folder_path}")
+            print("No images found in any of the specified folders")
             sys.exit(1)
 
         # Shuffle if configured
         if self.config['shuffle']:
             random.shuffle(self.images)
         else:
-            # Sort by filename
-            self.images.sort()
+            # Sort by folder index first, then by filename
+            self.images.sort(key=lambda x: (x[1], x[0].name))
 
         if self.images:
-            print(f"Found {len(self.images)} images in {folder_path}")
+            total_folders = len(set(folder_index for _, folder_index in self.images))
+            print(f"Found {len(self.images)} images across {total_folders} folders")
 
     def handle_folder_changes(self, path: str) -> None:
-        """Handle changes to the image folder with debouncing"""
+        """Handle changes to any of the image folders with debouncing"""
+        # Stop any existing timer to prevent race conditions
+        if self.folder_change_timer.isActive():
+            self.folder_change_timer.stop()
         self.pending_folder_changes = path
         self.folder_change_timer.start(FOLDER_CHANGE_DEBOUNCE)
 
@@ -669,7 +722,7 @@ class SlideshowWindow(QMainWindow):
         # Get current image path before updating list
         current_path = None
         if self.images and 0 <= self.current_index < len(self.images):
-            current_path = self.images[self.current_index]
+            current_path = self.images[self.current_index][0]
         
         # Reload images
         old_images = set(self.images)
@@ -680,11 +733,11 @@ class SlideshowWindow(QMainWindow):
         if not self.images:
             self.slide_timer.stop()
             print(f"All images have been deleted from {path}. Last image will remain displayed.")
-            self.statusBar().showMessage("No images in folder - last image remains displayed")
+            self.statusBar().showMessage("No images in any folder - last image remains displayed")
             return
             
         # If current image was deleted, keep it displayed until timer expires
-        if current_path and current_path not in new_images:
+        if current_path and not any(img[0] == current_path for img in new_images):
             # Don't update current_index or show next slide
             # Just update the status bar to show we're on the last image
             self.statusBar().showMessage(
@@ -699,11 +752,11 @@ class SlideshowWindow(QMainWindow):
             return
             
         # Update current index to point to same image if it still exists
-        if current_path and current_path in new_images:
-            self.current_index = self.images.index(current_path)
+        if current_path and any(img[0] == current_path for img in new_images):
+            self.current_index = next(i for i, img in enumerate(new_images) if img[0] == current_path)
             # Update status bar
             self.statusBar().showMessage(
-                f"Image {self.current_index + 1} of {len(self.images)}: {self.images[self.current_index].name}"
+                f"Image {self.current_index + 1} of {len(self.images)}: {self.images[self.current_index][0].name}"
             )
         else:
             # If no current image or it was deleted, start from beginning
@@ -764,12 +817,15 @@ class SlideshowWindow(QMainWindow):
 
         self.is_fullscreen = fullscreen
 
+    def _handle_empty_slideshow(self) -> None:
+        """Handle the case when there are no images to display"""
+        self.slide_timer.stop()
+        self.statusBar().showMessage("No images in any folder - last image remains displayed")
+
     def next_slide(self) -> None:
         """Show the next slide"""
         if not self.images:
-            # If no images remain, stop the timer and keep current image displayed
-            self.slide_timer.stop()
-            self.statusBar().showMessage("No images in folder - last image remains displayed")
+            self._handle_empty_slideshow()
             return
 
         # Increment index with wraparound
@@ -779,9 +835,7 @@ class SlideshowWindow(QMainWindow):
     def prev_slide(self) -> None:
         """Show the previous slide"""
         if not self.images:
-            # If no images remain, stop the timer and keep current image displayed
-            self.slide_timer.stop()
-            self.statusBar().showMessage("No images in folder - last image remains displayed")
+            self._handle_empty_slideshow()
             return
 
         # Decrement index with wraparound
@@ -806,7 +860,7 @@ class SlideshowWindow(QMainWindow):
     def show_current_slide(self) -> None:
         """Show the current slide based on index"""
         if 0 <= self.current_index < len(self.images):
-            image_path = self.images[self.current_index]
+            image_path, folder_index = self.images[self.current_index]
             self.current_image_path = image_path  # Track current image path
 
             try:
@@ -821,8 +875,6 @@ class SlideshowWindow(QMainWindow):
                 self.failed_image_count = 0
                 
                 # Resize image to monitor dimensions while preserving aspect ratio
-                # This ensures all images have a consistent size based on the monitor dimensions,
-                # which helps make transitions between images of different aspect ratios look smoother
                 pixmap = self.resize_image_to_monitor(pixmap)
 
                 # If this is the very first image shown (slideshow just started)
@@ -837,12 +889,13 @@ class SlideshowWindow(QMainWindow):
                     # For all other cases, including looping back to first slide, use transition
                     self.slideshow_widget.set_next_image(pixmap)
 
-                # Show image number in statusbar with truncated filename
+                # Show image number in statusbar with truncated filename and folder name
                 filename = image_path.name
+                folder_name = image_path.parent.name
                 if len(filename) > 30:
                     filename = filename[:27] + "..."
                 self.statusBar().showMessage(
-                    f"Image {self.current_index + 1} of {len(self.images)}: {filename}"
+                    f"Image {self.current_index + 1} of {len(self.images)}: {folder_name}/{filename}"
                 )
 
                 # Restart the timer for the next slide
@@ -904,15 +957,17 @@ class SlideshowWindow(QMainWindow):
         """Handle window close event"""
         self.slide_timer.stop()
         self.folder_change_timer.stop()
-        # Remove file system watcher
-        if self.fs_watcher:
-            self.fs_watcher.removePath(str(Path(self.config['folder'])))
+        # Remove file system watchers
+        for watcher in self.fs_watchers:
+            for path in watcher.directories():
+                watcher.removePath(path)
         # Clean up pixmaps and cache
         if hasattr(self, 'slideshow_widget'):
-            self.slideshow_widget.current_image = QPixmap()
-            self.slideshow_widget.next_image = QPixmap()
-            self.slideshow_widget.scaled_current = QPixmap()
-            self.slideshow_widget.scaled_next = QPixmap()
+            # Explicitly delete QPixmap objects
+            self.slideshow_widget.current_image = None
+            self.slideshow_widget.next_image = None
+            self.slideshow_widget.scaled_current = None
+            self.slideshow_widget.scaled_next = None
             self.slideshow_widget.clear_cache()
         # Clear monitor cache
         self.clear_monitor_cache()
@@ -964,10 +1019,9 @@ class SlideshowWindow(QMainWindow):
         x = (target_width - scaled_img.width()) // 2
         y = (target_height - scaled_img.height()) // 2
         
-        # Paint the scaled image onto the black background
-        painter = QPainter(result)
-        painter.drawPixmap(x, y, scaled_img)
-        painter.end()
+        # Paint the scaled image onto the black background using a context manager
+        with QPainter(result) as painter:
+            painter.drawPixmap(x, y, scaled_img)
         
         # Manage cache size
         if len(self.monitor_scaled_cache) >= self.monitor_cache_size:
